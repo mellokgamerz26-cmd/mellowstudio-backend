@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MELLOW BLOX Studio — ElevenLabs Proxy Diagnostics</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: #0c0a15; color: #e2e8f0; padding: 2rem; max-width: 900px; margin: 0 auto; }
+    h1 { color: #f97316; font-size: 1.6rem; margin-bottom: 0.25rem; }
+    p.sub { color: #94a3b8; margin-top: 0; }
+    .card { background: #141224; border: 1px solid #334155; padding: 1.25rem; border-radius: 1rem; margin-bottom: 1rem; }
+    label { display: block; font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.25rem; font-weight: 600; }
+    input, textarea, select { width: 100%; background: #0f172a; border: 1px solid #334155; color: #fff; padding: 0.7rem; border-radius: 0.5rem; margin-bottom: 0.9rem; box-sizing: border-box; }
+    .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; }
+    .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    button { background: linear-gradient(to right, #f97316, #9333ea); color: #fff; font-weight: 700; border: none; padding: 0.7rem 1rem; border-radius: 0.5rem; cursor: pointer; }
+    button.secondary { background: #334155; }
+    button:hover { opacity: 0.92; }
+    pre { background: #020617; padding: 1rem; border-radius: 0.5rem; color: #93c5fd; overflow-x: auto; font-size: 0.8rem; white-space: pre-wrap; word-break: break-word; min-height: 120px; }
+    audio { width: 100%; margin-top: 0.75rem; display: none; }
+    .note { font-size: 0.85rem; color: #cbd5e1; }
+    code { color: #fbbf24; }
+  </style>
+</head>
+<body>
+  <h1>MELLOW BLOX ElevenLabs Proxy Diagnostics</h1>
+  <p class="sub">Local and deployed checks for authenticated narration, sound effects, voices, and account usage.</p>
+
+  <div class="card">
+    <label for="proxyToken">Proxy Token (required)</label>
+    <input type="password" id="proxyToken" placeholder="Enter your PROXY_TOKEN" autocomplete="off" />
+
+    <div class="row">
+      <div>
+        <label for="voiceId">Voice ID (optional)</label>
+        <input type="text" id="voiceId" placeholder="Leave blank to use server default" />
+      </div>
+      <div>
+        <label for="withTimestamps">TTS mode</label>
+        <select id="withTimestamps">
+          <option value="false">Standard MP3 audio</option>
+          <option value="true">With timestamps (JSON: audio_base64 + alignment)</option>
+        </select>
+      </div>
+    </div>
+
+    <label for="testText">Narration / prompt text</label>
+    <textarea id="testText" rows="3">Welcome to Mellow Town. This is a live test of the secure ElevenLabs proxy.</textarea>
+
+    <div class="actions">
+      <button id="btnHealth" class="secondary">Test Health</button>
+      <button id="btnVoices" class="secondary">List Voices</button>
+      <button id="btnUsage" class="secondary">Get Usage</button>
+      <button id="btnTts">Run TTS</button>
+      <button id="btnSfx" class="secondary">Run SFX</button>
+    </div>
+    <p class="note">Requests are sent to <code>/api/*</code> on the same origin with <code>x-proxy-token</code>. Do not embed real API keys in client code.</p>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Results</h3>
+    <pre id="log">Ready.</pre>
+    <audio id="audioPlayer" controls></audio>
+  </div>
+
+  <script>
+    const logEl = document.getElementById('log');
+    const player = document.getElementById('audioPlayer');
+    const tokenEl = document.getElementById('proxyToken');
+    const textEl = document.getElementById('testText');
+    const voiceIdEl = document.getElementById('voiceId');
+    const timestampsEl = document.getElementById('withTimestamps');
+
+    function log(message) {
+      logEl.textContent = typeof message === 'string' ? message : JSON.stringify(message, null, 2);
+    }
+
+    function authHeaders(extra = {}) {
+      const token = tokenEl.value.trim();
+      return {
+        'x-proxy-token': token,
+        ...extra,
+      };
+    }
+
+    function resetAudio() {
+      if (player.src) URL.revokeObjectURL(player.src);
+      player.removeAttribute('src');
+      player.style.display = 'none';
+      player.load();
+    }
+
+    async function showResponse(label, resp) {
+      const contentType = resp.headers.get('content-type') || '';
+      let bodyText = `HTTP ${resp.status} ${resp.statusText}\nContent-Type: ${contentType || '(none)'}\n\n`;
+
+      if (contentType.includes('audio/')) {
+        const blob = await resp.blob();
+        bodyText += `${label} succeeded.\nReceived audio blob: ${blob.size} bytes.`;
+        resetAudio();
+        player.src = URL.createObjectURL(blob);
+        player.style.display = 'block';
+        await player.play().catch(() => {});
+        log(bodyText);
+        return;
+      }
+
+      const text = await resp.text();
+      let parsed = text;
+      try { parsed = text ? JSON.parse(text) : {}; } catch {}
+      if (parsed && typeof parsed === 'object' && parsed.audio_base64) {
+        bodyText += `${label} succeeded.\nReceived JSON with audio_base64 and alignment.\n\n${JSON.stringify({
+          audio_base64_length: parsed.audio_base64.length,
+          alignment: parsed.alignment,
+          normalized_alignment: parsed.normalized_alignment,
+        }, null, 2)}`;
+        try {
+          const binary = atob(parsed.audio_base64);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          const blob = new Blob([bytes], { type: 'audio/mpeg' });
+          resetAudio();
+          player.src = URL.createObjectURL(blob);
+          player.style.display = 'block';
+        } catch {}
+        log(bodyText);
+        return;
+      }
+
+      bodyText += typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2);
+      log(bodyText);
+    }
+
+    async function requestJson(path, options = {}) {
+      resetAudio();
+      log(`Requesting ${path} ...`);
+      try {
+        const resp = await fetch(path, options);
+        await showResponse(path, resp);
+      } catch (err) {
+        log(`Request failed: ${err.message}`);
+      }
+    }
+
+    document.getElementById('btnHealth').addEventListener('click', () => {
+      requestJson('/api/health', { headers: authHeaders() });
+    });
+
+    document.getElementById('btnVoices').addEventListener('click', () => {
+      requestJson('/api/voices', { headers: authHeaders() });
+    });
+
+    document.getElementById('btnUsage').addEventListener('click', () => {
+      requestJson('/api/usage', { headers: authHeaders() });
+    });
+
+    document.getElementById('btnTts').addEventListener('click', () => {
+      const payload = {
+        text: textEl.value.trim(),
+        with_timestamps: timestampsEl.value === 'true',
+      };
+      const voiceId = voiceIdEl.value.trim();
+      if (voiceId) payload.voice_id = voiceId;
+      requestJson('/api/tts', {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload),
+      });
+    });
+
+    document.getElementById('btnSfx').addEventListener('click', () => {
+      requestJson('/api/sfx', {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ text: textEl.value.trim(), duration_seconds: 1.5, prompt_influence: 0.3 }),
+      });
+    });
+  </script>
+</body>
+</html>

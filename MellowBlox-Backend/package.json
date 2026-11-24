@@ -1,0 +1,17 @@
+{
+  "name": "mellowblox-elevenlabs-backend",
+  "version": "1.0.0",
+  "description": "Secure Vercel serverless ElevenLabs proxy backend for narration, sound effects, voices, and account usage",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "dev": "vercel dev",
+    "start": "node scripts/local-server.js",
+    "test:local": "node scripts/test-local.js",
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {}
+}
